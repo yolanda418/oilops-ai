@@ -1,0 +1,19 @@
+# OilOps AI - Python dependencies
+# STEP 2 (Invoice Upload + Local PDF Parsing) requires these packages.
+
+# Local PDF parsing
+pypdf>=5.0
+
+# Streamlit UI
+streamlit>=1.30
+
+# Environment configuration
+python-dotenv>=1.0
+
+# Test suite
+pytest>=8.0
+
+# (optional) regenerate synthetic test fixture
+# pip install reportlab
+# python sample_data/synthetic_invoices/make_synthetic.py
+reportlab>=4.0

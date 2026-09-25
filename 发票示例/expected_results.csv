@@ -1,0 +1,16 @@
+﻿filename,vendor,invoice_number,invoice_date,due_date,po_number,subtotal,gst,total,currency,expected_category,expected_issue,expected_duplicate,expected_privacy_redaction
+01_prairie_pump_rentals.pdf,Prairie Pump Rentals,PPR-260901,2026-09-01,2026-10-01,PO-TEST-4101,4800.00,240.00,5040.00,CAD,Equipment Rental,,No,No
+02_rocky_field_services.pdf,Rocky Field Services,RFS-260915,2026-09-15,2026-10-15,PO-TEST-4102,3275.00,163.75,3438.75,CAD,Field Services,,No,No
+03_calgary_freight_demo.pdf,Calgary Freight Demo,CFD-88421,2026-09-10,2026-10-10,PO-TEST-4103,1250.00,62.50,1312.50,CAD,Transportation,,No,No
+04_apex_safety_services.pdf,Apex Safety Services,ASS-093026,2026-09-03,2026-10-03,PO-TEST-4104,890.00,44.50,934.50,CAD,Safety/PPE,,No,No
+05_western_environmental_demo.pdf,Western Environmental Demo,WED-260918,2026-09-18,2026-10-18,PO-TEST-4105,5600.00,280.00,5880.00,CAD,Professional/Environmental Services,,No,No
+06_northern_equipment_demo.pdf,Northern Equipment Demo,NED-11984,2026-09-08,2026-10-08,,2150.00,107.50,2257.50,CAD,Equipment Rental,Missing PO,No,No
+07_prairie_pump_duplicate.pdf,Prairie Pump Rentals,PPR-260901,2026-09-01,2026-10-01,PO-TEST-4101,4800.00,240.00,5040.00,CAD,Equipment Rental,Duplicate Submission,Yes,No
+08_summit_field_services.pdf,Summit Field Services,SFS-260920,2026-09-20,2026-10-20,PO-TEST-4108,2000.00,100.00,2250.00,CAD,Field Services,"GST/Total mismatch: expected CAD 2,100.00",No,No
+09_alberta_office_supply_demo.pdf,Alberta Office Supply Demo,AOS-65017,2026-09-12,2026-10-12,PO-TEST-4109,425.00,21.25,446.25,CAD,Office Expense,,No,No
+10_western_inspection_demo.pdf,Western Inspection Demo,WID-2026-091,2026-09-20,2026-09-28,PO-TEST-4110,1450.00,72.50,1522.50,CAD,Inspection Services,Due Soon,No,No
+11_foothills_maintenance_demo.pdf,Foothills Maintenance Demo,FMD-2609017,2026-08-15,2026-09-14,PO-TEST-4111,3200.00,160.00,3360.00,CAD,Maintenance,Overdue,No,No
+12_us_equipment_demo.pdf,US Equipment Demo,USE-77109,2026-09-05,2026-10-05,PO-TEST-4112,1800.00,0.00,1800.00,USD,Equipment Rental,,No,No
+13_boreal_site_services.pdf,Boreal Site Services,BSS-260922,2026-09-22,2026-10-22,PO-TEST-4113,2750.00,137.50,2887.50,CAD,Field Services,Contains sensitive banking and contact details,No,Yes
+14_clearwater_consulting_demo.pdf,Clearwater Consulting Demo,CCD-260923,2026-09-23,,PO-TEST-4114,4100.00,205.00,4305.00,CAD,Consulting Services,Missing Due Date,No,No
+15_iron_ridge_services.pdf,Iron Ridge Services,IRS-2026-0924,2026-09-24,2026-10-24,PO-TEST-4115,7350.00,367.50,7717.50,CAD,Field Services,,No,No
