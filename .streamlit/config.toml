@@ -1,0 +1,19 @@
+
+[theme]
+base = "light"
+primaryColor = "#1f6feb"
+
+[server]
+# Public demo: no need for long-lived websockets.
+enableCORS = false
+enableXsrfProtection = true
+# Cap single-upload size in case any future page ever surfaces an uploader.
+maxUploadSize = 5
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# Disable toolbar menu items that could confuse public visitors.
+toolbarMode = "minimal"
