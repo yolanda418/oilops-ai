@@ -1180,7 +1180,10 @@ def _tracker_render_detail(detail):
         st.markdown("**Due Date:** " + str(inv.due_date or "-"))
         st.markdown("**PO:** " + str(inv.po_number or "-"))
         st.markdown("**Category:** " + str(inv.expense_category or "-"))
-        st.markdown("**Description:** " + str(inv.description or "-"))
+        st.markdown(
+            "**Description:** "
+            + str(inv.description or "No description available")
+        )
     with _dl2:
         st.markdown("**Subtotal:** "
                     + (("%.2f " % inv.subtotal) if inv.subtotal is not None else "- ")

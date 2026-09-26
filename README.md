@@ -7,7 +7,7 @@
 [![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B.svg)]()
 [![SQLite](https://img.shields.io/badge/Storage-SQLite-003B57.svg)]()
 [![License](https://img.shields.io/badge/License-Portfolio-lightgrey.svg)]()
-[![Tests](https://img.shields.io/badge/Offline_tests-478%2F478-success.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-478_collected-informational.svg)]()
 
 OilOps AI is a Streamlit-based desktop prototype that automates the
 *administrative* side of running a small upstream oil & gas operation:
@@ -177,7 +177,7 @@ oilops-ai/
 |   |-- models.py                   SQL DDL
 |   |-- __init__.py
 |
-|-- tests/                          410 passing offline tests
+|-- tests/                            478 collected offline tests
 |   |-- fixtures/
 |   |   |-- make_e2e_invoices.py    Synthetic 15-PDF fixture generator
 |   |-- test_extractor.py           Field extraction tests
@@ -201,6 +201,23 @@ oilops-ai/
 |
 |-- DEMO.md                         2-minute scripted demo walkthrough
 ```
+
+---
+
+## Screenshots
+
+These screenshots use the committed synthetic invoice fixtures and show three
+stages of the workflow. They contain no real vendor data.
+
+| Stage | Screenshot |
+| ----- | ---------- |
+| Dashboard and KPIs | ![OilOps AI dashboard](docs/images/dashboard.png) |
+| Batch intake of 15 synthetic invoices (11 ready, 3 needs review, 1 possible duplicate) | ![OilOps AI batch intake](docs/images/batch-intake.png) |
+| Invoice tracker detail, including review and payment tracking | ![OilOps AI invoice tracker](docs/images/invoice-detail.png) |
+
+The 15-PDF batch is a separate demonstration from the single-invoice
+walk-through in [`DEMO.md`](DEMO.md); no invoice is automatically approved or
+paid.
 
 ---
 
@@ -236,7 +253,7 @@ python -m pytest -q
 
 | Test class | What it proves |
 | ---------- | -------------- |
-| Automated regression suite | Unit and integration behavior across extraction, privacy, validation, tracker, payments, exports, demo reset, and weekly summaries. Run `python -m pytest -q`. |
+| Automated regression suite | Unit and integration behavior across extraction, privacy, validation, tracker, payments, exports, demo reset, and weekly summaries. **478 tests collected** locally as of this release; run `python -m pytest -q`. |
 | 15-PDF synthetic acceptance audit | Reproducibly processes the committed `发票示例/` PDFs against `expected_results.csv`; run `python -m pytest -q tests/test_15_invoice_acceptance.py`. |
 | Single-invoice lifecycle test | `tests/test_full_e2e.py::test_full_invoice_lifecycle_e2e` exercises one generated invoice through approval/payment and downstream metrics. It is not the 15-PDF acceptance audit. |
 

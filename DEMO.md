@@ -111,4 +111,5 @@ Say:
   uploaded. Delete it (or run `python -m database.db` to re-init)
   before the next demo to start clean.
 - The `tests/` folder covers the entire pipeline. Run
-  `python -m pytest -q` to show `341 passed`.
+  `python -m pytest -q`; **478 tests were collected** for this portfolio review
+  (collection count, not a test run in this review).
