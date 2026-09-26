@@ -26,7 +26,8 @@ import sqlite3
 from pathlib import Path
 from typing import Optional, Tuple
 
-from database.db import init_db as _init_user_db
+from database.db import init_db as _init_user_db, resolve_db_path as _resolve_user_db_path
+from .document_storage import DEFAULT_DOCS_DIR as _DEFAULT_USER_DOCS_DIR
 from .invoice_extractor import InvoiceExtraction
 from .invoice_repository import (
     STATUS_APPROVED,
@@ -158,6 +159,79 @@ def reset_demo_db(db_path=None, docs_root=None) -> Path:
     _init_user_db(str(demo_path))
     return demo_path
 
+
+def clear_demo_data(db_path=None, docs_root=None) -> int:
+    """Clear demo invoice rows and demo documents without changing schema.
+
+    This deliberately does not unlink/recreate the database and never seeds it.
+    Only a file named ``demo_oilops.db`` is eligible. The resolved target must
+    also differ from both the configured user DB and the default user DB.
+    Returns the remaining invoice count (always zero on success).
+    """
+    demo_path = resolve_demo_db_path(db_path).resolve()
+    configured_demo_path = resolve_demo_db_path().resolve()
+    configured_user_path = Path(_resolve_user_db_path()).resolve()
+    user_paths = {
+        Path(_init_user_db.__globals__["DEFAULT_DB_PATH"]).resolve(),
+    }
+    if (
+        demo_path.name.lower() != "demo_oilops.db"
+        or demo_path in user_paths
+        or (
+            db_path is None and demo_path != configured_demo_path
+        )
+        or (
+            db_path is not None
+            and demo_path != configured_demo_path
+            and demo_path != configured_user_path
+        )
+    ):
+        raise DemoEnvironmentError(
+            "Refusing to clear data: target is not an isolated demo_oilops.db."
+        )
+
+    docs_dir = resolve_demo_docs_root(docs_root).resolve()
+    expected_docs = DEFAULT_DEMO_DOCS_DIR.resolve()
+    configured_docs = Path(os.getenv("OILOPS_DEMO_DOCS_DIR", expected_docs)).resolve()
+    allowed_docs = {expected_docs}
+    # Explicit paths are only intended for isolated tests/maintenance calls;
+    # the UI (which passes no explicit db_path) can touch only data/demo_documents.
+    if db_path is not None or os.getenv("OILOPS_DEMO_DOCS_DIR"):
+        allowed_docs.add(configured_docs)
+    if (
+        docs_dir not in allowed_docs
+        or docs_dir.name.lower() != "demo_documents"
+        or docs_dir == Path(_DEFAULT_USER_DOCS_DIR).resolve()
+    ):
+        raise DemoEnvironmentError(
+            "Refusing to clear data outside the configured demo documents directory."
+        )
+
+    if demo_path.exists():
+        conn = sqlite3.connect(str(demo_path))
+        try:
+            conn.execute("DELETE FROM invoices")
+            conn.commit()
+            count = int(conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0])
+        except sqlite3.Error as exc:
+            conn.rollback()
+            raise DemoEnvironmentError("Could not clear demo invoice rows: %s" % exc)
+        finally:
+            conn.close()
+    else:
+        count = 0
+
+    if docs_dir.exists():
+        for entry in docs_dir.iterdir():
+            try:
+                if entry.is_file() or entry.is_symlink():
+                    entry.unlink()
+                elif entry.is_dir():
+                    shutil.rmtree(entry)
+            except OSError as exc:
+                raise DemoEnvironmentError("Could not clear demo documents: %s" % exc)
+    return count
+
 # ---------------------------------------------------------------------
 # Demo seed (small, deterministic, synthetic only)
 # ---------------------------------------------------------------------
@@ -270,6 +344,7 @@ __all__ = [
     "DemoEnvironmentError",
     "DemoResetError",
     "demo_db_summary",
+    "clear_demo_data",
     "is_demo_path",
     "reset_demo_db",
     "resolve_demo_db_path",

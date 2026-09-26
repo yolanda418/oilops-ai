@@ -32,6 +32,7 @@ from services.demo_reset import (
     DEFAULT_DEMO_DB_PATH,
     DEFAULT_DEMO_DOCS_DIR,
     DemoEnvironmentError,
+    clear_demo_data,
     demo_db_summary,
     is_demo_path,
     reset_demo_db,
@@ -301,6 +302,83 @@ def test_resolve_demo_docs_root_is_different_from_user_docs():
     from services.document_storage import DEFAULT_DOCS_DIR
     assert DEFAULT_DEMO_DOCS_DIR != DEFAULT_DOCS_DIR
     assert "demo" in str(DEFAULT_DEMO_DOCS_DIR).lower()
+
+
+def test_clear_demo_data_removes_rows_and_documents_but_preserves_schema(tmp_demo_db):
+    reset_demo_db()
+    conn = get_connection(str(resolve_demo_db_path()))
+    try:
+        seed_demo_invoices(conn)
+        conn.commit()
+        tables_before = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).fetchall()
+    finally:
+        conn.close()
+    docs = resolve_demo_docs_root()
+    (docs / "sample.pdf").write_bytes(b"synthetic")
+    nested = docs / "nested"
+    nested.mkdir()
+    (nested / "sample.txt").write_text("demo", encoding="utf-8")
+
+    assert clear_demo_data() == 0
+    summary = demo_db_summary()
+    assert summary["count"] == 0
+    assert list(docs.iterdir()) == []
+    conn = get_connection(str(resolve_demo_db_path()))
+    try:
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).fetchall() == tables_before
+        assert conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_clear_demo_data_refuses_user_database(tmp_demo_db):
+    user_db = tmp_demo_db["user_db"]
+    init_db(str(user_db))
+    conn = get_connection(str(user_db))
+    try:
+        seed_demo_invoices(conn)
+        conn.commit()
+        before = conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0]
+    finally:
+        conn.close()
+
+    with pytest.raises(DemoEnvironmentError):
+        clear_demo_data(db_path=str(user_db))
+
+    conn = get_connection(str(user_db))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0] == before
+    finally:
+        conn.close()
+    assert user_db.exists()
+
+
+def test_clear_demo_data_refuses_when_oilops_db_is_user_db_env(tmp_demo_db):
+    user_db = tmp_demo_db["demo_db"].with_name("oilops.db")
+    init_db(str(user_db))
+    monkeypatch_path = os.environ.get("OILOPS_DB_PATH")
+    os.environ["OILOPS_DB_PATH"] = str(user_db)
+    try:
+        with pytest.raises(DemoEnvironmentError):
+            clear_demo_data(db_path=str(user_db))
+        assert user_db.exists()
+    finally:
+        if monkeypatch_path is None:
+            os.environ.pop("OILOPS_DB_PATH", None)
+        else:
+            os.environ["OILOPS_DB_PATH"] = monkeypatch_path
+
+
+def test_clear_demo_data_rejects_other_database_name(tmp_demo_db):
+    other = tmp_demo_db["demo_db"].with_name("demo_other.db")
+    init_db(str(other))
+    with pytest.raises(DemoEnvironmentError):
+        clear_demo_data(db_path=str(other))
+    assert other.exists()
 
 
 # ---------------------------------------------------------------------

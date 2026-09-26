@@ -526,11 +526,6 @@ def test_spec_scenario_office_supplies_other_when_ambiguous():
 
 def test_privacy_filter_suite_still_importable():
     """STEP 4 must continue to function after STEP 6 additions."""
-def test_privacy_filter_suite_still_importable():
-    """STEP 4 must continue to function after STEP 6 additions."""
-    from services.privacy_filter import redact_text, build_ai_safe_payload
-def test_privacy_filter_suite_still_importable():
-    """STEP 4 must continue to function after STEP 6 additions."""
     from services.privacy_filter import redact_text, build_ai_safe_payload
     # The privacy filter requires a context label + a long enough
     # number run to trigger detection. A bare 3-digit number is

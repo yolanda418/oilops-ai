@@ -194,7 +194,9 @@ def test_resolve_docs_root_creates_dir(tmp_path, monkeypatch):
 def test_default_docs_root_is_data_documents(monkeypatch):
     monkeypatch.delenv("OILOPS_DOCS_DIR", raising=False)
     from services import document_storage as ds
-    pass
+    expected = Path(ds.__file__).resolve().parent.parent / "data" / "documents"
+    assert ds.DEFAULT_DOCS_DIR == expected
+    assert ds.resolve_docs_root() == expected
 
 
 def test_documents_never_escapes_root_in_save(docs_tmp):

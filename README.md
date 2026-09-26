@@ -7,7 +7,7 @@
 [![Streamlit](https://img.shields.io/badge/UI-Streamlit-FF4B4B.svg)]()
 [![SQLite](https://img.shields.io/badge/Storage-SQLite-003B57.svg)]()
 [![License](https://img.shields.io/badge/License-Portfolio-lightgrey.svg)]()
-[![Tests](https://img.shields.io/badge/V1.1.1_targeted-127%2F127-success.svg)]()
+[![Tests](https://img.shields.io/badge/Offline_tests-478%2F478-success.svg)]()
 
 OilOps AI is a Streamlit-based desktop prototype that automates the
 *administrative* side of running a small upstream oil & gas operation:
@@ -72,8 +72,8 @@ subtotal 15/15  gst 15/15  total 15/15  currency 15/15
 ```
 
 Special cases verified: `#6 MISSING_PO`, `#7 POSSIBLE_DUPLICATE`,
-`#8 AMOUNT_MISMATCH` (Subtotal + GST != Total), `#13 ROUTING_NUMBER`
-redacted from raw invoice text.
+`#8 AMOUNT_MISMATCH` (Subtotal + GST != Total), `#13` synthetic banking/contact
+details redacted from raw invoice text, and `#14 MISSING_DUE_DATE`.
 
 ---
 
@@ -227,26 +227,18 @@ features fall back to a deterministic mock when no key is present.
 
 ## Testing
 
-The full test suite runs locally with no network access. The
-`test_weekly_summary` module is intentionally excluded from the
-offline run because it exercises the live optional LLM narrative path.
+The full test suite runs locally without external network access. AI providers
+are injected or stubbed in tests; no live API key or HTTP call is needed.
 
 ```bash
-# Offline run (V1.1.1 regression)
-python -m pytest -q --ignore=tests/test_weekly_summary.py
-
-# Historical full regression (includes weekly_summary LLM-stub tests)
 python -m pytest -q
 ```
 
-| Run                                                   | Result                            |
-| ----------------------------------------------------- | --------------------------------- |
-| V1.1.1 targeted (extractor + privacy + checker)      | **127 passed**                    |
-| V1.1.1 offline regression (full minus weekly_summary) | **410 passed / 0 failed**        |
-| Historical full regression (466 collected)            | **466 passed / 0 failed** (baseline) |
-
-The E2E synthetic-invoice audit (15 multi-layout PDFs, 9 target fields
-each) is reproducible via `tests/test_full_e2e.py::test_full_invoice_lifecycle_e2e`.
+| Test class | What it proves |
+| ---------- | -------------- |
+| Automated regression suite | Unit and integration behavior across extraction, privacy, validation, tracker, payments, exports, demo reset, and weekly summaries. Run `python -m pytest -q`. |
+| 15-PDF synthetic acceptance audit | Reproducibly processes the committed `发票示例/` PDFs against `expected_results.csv`; run `python -m pytest -q tests/test_15_invoice_acceptance.py`. |
+| Single-invoice lifecycle test | `tests/test_full_e2e.py::test_full_invoice_lifecycle_e2e` exercises one generated invoice through approval/payment and downstream metrics. It is not the 15-PDF acceptance audit. |
 
 ---
 

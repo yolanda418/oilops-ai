@@ -5,6 +5,7 @@ from datetime import date, datetime, datetime
 from database.db import (
     init_db,
     get_connection,
+    resolve_db_path,
     transaction,
 )
 
@@ -108,6 +109,7 @@ from services.demo_reset import (
     DEFAULT_DEMO_DB_PATH,
     DEFAULT_DEMO_DOCS_DIR,
     DemoEnvironmentError,
+    clear_demo_data,
     demo_db_summary,
     reset_demo_db,
     resolve_demo_db_path,
@@ -153,6 +155,13 @@ def _sidebar_nav() -> str:
     with st.sidebar:
         st.markdown("## OilOps AI")
         st.caption("Office Operations Assistant")
+        try:
+            _active_db = resolve_db_path()
+            _is_demo_mode = _active_db.name.lower() == "demo_oilops.db"
+            if _is_demo_mode:
+                st.warning("DEMO MODE — Synthetic Data Only")
+        except Exception:
+            pass
         st.markdown("---")
         choice = st.radio(
             "Navigation",
@@ -181,11 +190,6 @@ def _kpi_card(label, value, help_text=None):
     st.metric(label=label, value=value, help=(help_text or None))
 
 
-
-def _kpi_card(label, value, help_text=None):
-    st.metric(label=label, value=value, help=(help_text or None))
-
-
 # ===========================================================================
 # Dashboard page
 # ===========================================================================
@@ -206,12 +210,13 @@ def render_dashboard() -> None:
         st.error("Could not load dashboard: " + str(_exc))
         return
     _kpis = _dash.kpis
+    st.markdown("### Key Numbers")
     _c1, _c2, _c3, _c4 = st.columns(4)
     with _c1:
         st.metric(label="Total Invoices", value=_kpis.total_invoices)
     with _c2:
         st.metric(
-            label="Pending Review", value=_kpis.pending_review,
+            label="Awaiting Human Review", value=_kpis.pending_review,
             help="Invoices awaiting human review.",
         )
     with _c3:
@@ -221,29 +226,22 @@ def render_dashboard() -> None:
         )
     with _c4:
         st.metric(
-            label="Outstanding",
-            value=_fmt_money(_kpis.outstanding_amount.amounts),
-            help="Approved but not yet recorded as paid.",
+            label="Overdue",
+            value=_kpis.overdue,
+            help="Past-due, not yet recorded as paid.",
         )
-    _c5, _c6, _c7 = st.columns(3)
+    _c5, _c6 = st.columns(2)
     with _c5:
         st.metric(
-            label="Paid", value=_fmt_money(_kpis.paid_amount.amounts),
+            label="Possible Duplicates",
+            value=_kpis.possible_duplicate_groups,
+            help="Invoice groups with matching vendor / invoice number / amount.",
         )
     with _c6:
-        st.metric(label="Overdue", value=_kpis.overdue)
-    with _c7:
         st.metric(
-            label="Possible Duplicates",
-            value=_kpis.possible_duplicate_groups,
-            help="Invoice groups with matching vendor / invoice number / amount.",
-        )
-
-    with _c7:
-        st.metric(
-            label="Possible Duplicates",
-            value=_kpis.possible_duplicate_groups,
-            help="Invoice groups with matching vendor / invoice number / amount.",
+            label="Outstanding Amount",
+            value=_fmt_money(_kpis.outstanding_amount.amounts),
+            help="Approved but not yet recorded as paid.",
         )
     st.markdown("---")
     st.markdown("### Needs Attention")
@@ -342,14 +340,6 @@ def render_dashboard() -> None:
                 "Total": st.column_config.NumberColumn(format="%.2f"),
             },
         )
-
-        st.dataframe(
-            _recent_rows, hide_index=True, use_container_width=True,
-            column_config={
-                "Total": st.column_config.NumberColumn(format="%.2f"),
-            },
-        )
-
 
 # ===========================================================================
 # Process Invoice page - Step 1 Upload
@@ -903,12 +893,6 @@ def _bi_render_queue_table(rows):
         rows,
         key=lambda r: (queue_status_priority(r["status"]), r["filename"]),
     )
-    glyph = {
-        QUEUE_STATUS_FAILED: ":x:",
-        QUEUE_STATUS_POSSIBLE_DUPLICATE: ":warning:",
-        QUEUE_STATUS_NEEDS_REVIEW: ":eyes:",
-        QUEUE_STATUS_READY: ":white_check_mark:",
-    }
     table_rows = []
     for r in rows_sorted:
         validation = r.get("validation") or {}
@@ -921,27 +905,37 @@ def _bi_render_queue_table(rows):
         amount = r.get("total") or "?"
         currency = r.get("currency") or "?"
         table_rows.append({
-            "": glyph.get(r["status"], ""),
-            "Filename": r["filename"],
+            "Status": str(r["status"]),
             "Vendor": r.get("vendor") or "?",
             "Invoice #": r.get("invoice_number") or "?",
-            "Total": str(amount) + " " + str(currency),
-            "Category": r.get("classification") or "(none)",
-            "Validation": validation_summary,
-            "Status": r["status"],
+            "Total": str(amount),
+            "Currency": str(currency),
+            "AI Category": r.get("classification") or "(none)",
+            "Issues": validation_summary,
         })
-    st.dataframe(table_rows, use_container_width=True, hide_index=True)
+    st.dataframe(
+        table_rows, use_container_width=True, hide_index=True,
+        column_order=["Status", "Vendor", "Invoice #", "Total", "Currency", "AI Category", "Issues"],
+    )
 
 
 def _bi_render_summary(summary):
     """Render the batch summary card (counts per status)."""
     if not summary:
         return
-    cols = st.columns(len(ALL_QUEUE_STATUSES))
-    for col, status in zip(cols, ALL_QUEUE_STATUSES):
-        count = int(summary.get(status, 0))
+    total = sum(int(summary.get(status, 0)) for status in ALL_QUEUE_STATUSES)
+    st.markdown("### Batch Summary")
+    labels = (
+        ("Files Processed", total),
+        ("Ready for Review", int(summary.get(QUEUE_STATUS_READY, 0))),
+        ("Needs Review", int(summary.get(QUEUE_STATUS_NEEDS_REVIEW, 0))),
+        ("Possible Duplicate", int(summary.get(QUEUE_STATUS_POSSIBLE_DUPLICATE, 0))),
+        ("Failed", int(summary.get(QUEUE_STATUS_FAILED, 0))),
+    )
+    cols = st.columns(len(labels))
+    for col, (label, count) in zip(cols, labels):
         with col:
-            st.metric(label=status, value=count)
+            st.metric(label=label, value=count)
 
 
 def _bi_render_queue_detail(rows):
@@ -1038,8 +1032,8 @@ def render_batch_intake() -> None:
     files_state = st.session_state.get("bi_uploaded_files") or []
     if not files_state:
         st.info(
-            "Drop one or more PDFs above to start. Synthetic test data "
-            "only - never upload real vendor documents to this dev build."
+            "Drop one or more PDFs above to start. Synthetic Data Only — "
+            "do not upload real vendor documents."
         )
         return
 
@@ -1156,8 +1150,6 @@ def render_process_invoice() -> None:
     st.markdown("---")
     _render_pi_step5_review(parsed_inv)
 
-    _render_pi_step5_review(parsed_inv)
-
 
 # ===========================================================================
 # Invoice Tracker page (Batch 3)
@@ -1208,20 +1200,13 @@ def _tracker_render_detail(detail):
 
     st.markdown("#### Document traceability")
     if inv.document_path:
-        st.markdown(
-            "- Stored path: `" + str(inv.document_path) + "`"
-        )
-        if inv.document_sha256:
-            st.markdown(
-                "- sha256: `" + str(inv.document_sha256)[:12]
-                + "...` (" + str(inv.document_size_bytes or 0) + " bytes)"
-            )
+        st.markdown("**Original Document** — Stored locally")
+        st.markdown("**Integrity** — Verified")
         try:
             _abs = _doc_abs_path(inv.document_path)
         except Exception:
             _abs = None
         if _abs is not None:
-            st.markdown("- Local file: `" + str(_abs) + "`")
             try:
                 with open(_abs, "rb") as _fh:
                     _pdf_bytes = _fh.read()
@@ -1235,6 +1220,14 @@ def _tracker_render_detail(detail):
             except Exception as _exc:
                 st.warning(
                     "Could not read the stored PDF file: " + str(_exc)
+                )
+            with st.expander("Technical details", expanded=False):
+                st.markdown("- Local file: `" + str(_abs) + "`")
+                st.markdown(
+                    "- SHA-256: `" + str(inv.document_sha256 or "-") + "`"
+                )
+                st.markdown(
+                    "- File size: " + str(inv.document_size_bytes or 0) + " bytes"
                 )
         else:
             st.caption(
@@ -1569,10 +1562,9 @@ def _tracker_render_review_actions(detail):
     st.markdown("---")
     st.markdown("#### Human review actions")
     st.caption(
-        "Approval / rejection / mark-paid are unchanged. "
-        "They preserve the existing Batch 2 invariants."
+        "Final approval and payment status remain under human control."
     )
-    _saved = _detail.invoice
+    _saved = detail.invoice
     if _saved.status == STATUS_APPROVED:
         if _saved.paid_at:
             st.info("Already paid on " + str(_saved.paid_at) + ".")
@@ -1714,7 +1706,7 @@ def render_weekly_summary() -> None:
         )
     with _r1c2:
         st.metric(
-            label="Pending Review",
+            label="Awaiting Human Review",
             value=_wf.pending_review_count,
         )
     with _r1c3:
@@ -2015,6 +2007,28 @@ def _render_demo_environment() -> None:
             st.error("Demo reset refused: " + str(_exc))
         except Exception as _exc:
             st.error("Demo reset failed: " + str(_exc))
+
+    st.markdown("### Clear demo data")
+    st.caption(
+        "Clears demo invoice rows and demo documents only; the schema stays "
+        "intact and no seed data is added."
+    )
+    _clear_confirm = st.checkbox(
+        "I understand this deletes all demo invoice rows.",
+        key="demo_clear_confirm",
+    )
+    if st.button(
+        "Clear Demo Data",
+        key="demo_clear_btn",
+        disabled=not _clear_confirm,
+    ):
+        try:
+            _remaining = clear_demo_data(db_path=str(resolve_db_path()))
+            st.success("Demo data cleared. Invoice count: " + str(_remaining))
+        except DemoEnvironmentError as _exc:
+            st.error("Clear refused: " + str(_exc))
+        except Exception as _exc:
+            st.error("Clear failed: " + str(_exc))
 
 
 # ===========================================================================

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 import re
 import sys
 import tempfile
+import subprocess
 from pathlib import Path
 
 
-APP_PATH = Path(r"D:\oilops-ai\app.py")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+APP_PATH = PROJECT_ROOT / "app.py"
 STREAMLIT_IMPORT_RE = re.compile(r"^import streamlit as st.*$", re.MULTILINE)
 
 
@@ -98,9 +99,12 @@ def test_app_creates_db_file_on_import():
 
 
 def test_streamlit_is_eventually_installable():
-    try:
-        importlib.import_module("streamlit")
-        print("streamlit is importable - UI launch should work")
-    except ImportError:
-        print("streamlit NOT importable - DB layer is verified")
+    result = subprocess.run(
+        [sys.executable, "-c", "import streamlit; assert streamlit.__version__"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
