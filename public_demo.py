@@ -12,8 +12,10 @@ share.streamlit.io. It is intentionally small and strict:
   path. The OPENAI_API_KEY environment variable is NEVER consulted,
   even if a malicious visitor manages to set it via st.secrets.
 * File uploads from the public UI are disabled. Visitors can only
-  re-run the per-file pipeline against the synthetic PDF fixtures
-  already bundled in this repository (data/demo_documents/*.pdf).
+  * re-run the per-file pipeline against the synthetic PDF fixtures
+  * already bundled in this repository
+  * (``发票示例/*.pdf``, plus an opt-in local override at
+  * ``data/demo_documents/*.pdf``).
 * A persistent "Public Demo - Synthetic Data Only" banner is rendered
   on every page so visitors understand what they are looking at.
 
@@ -217,18 +219,44 @@ from services.csv_export import (  # noqa: E402
     assert_no_sensitive_columns,
 )
 
-
 # ---------------------------------------------------------------------------
 # Idempotent seeding + sample PDF list.
-# ---------------------------------------------------------------------------
-_DEMO_PDF_DIR = PROJECT_ROOT / "data" / "demo_documents"
+# Synthetic PDF fixtures live in the committed ``发票示例/`` folder
+# (it is .gitignore-whitelisted by name so the PDFs are always shipped
+# with the repo, including on Streamlit Community Cloud). For local
+# developer convenience we also fall back to ``data/demo_documents``
+# if a developer drops synthetic PDFs there for hand-testing; that
+# folder is normally absent in the deployed container.
+_COMMITTED_SYNTHETIC_PDF_DIR = PROJECT_ROOT / "发票示例"
+_LOCAL_OVERRIDE_SYNTHETIC_PDF_DIR = PROJECT_ROOT / "data" / "demo_documents"
+
+
+def _demo_pdf_dir() -> Path:
+    """Return the directory that holds the synthetic PDFs.
+
+    Priority:
+        1. ``data/demo_documents`` if it exists (developer override).
+        2. ``发票示例`` (committed fixtures, shipped to Cloud).
+        3. The committed fixtures directory even if it does not exist
+           yet (so callers can still reason about the path).
+    """
+    if _LOCAL_OVERRIDE_SYNTHETIC_PDF_DIR.exists():
+        return _LOCAL_OVERRIDE_SYNTHETIC_PDF_DIR
+    return _COMMITTED_SYNTHETIC_PDF_DIR
 
 
 def _list_synthetic_pdfs() -> List[Path]:
-    """Return the committed synthetic PDFs (data/demo_documents/*.pdf)."""
-    if not _DEMO_PDF_DIR.exists():
+    """Return the committed synthetic PDFs available to public-demo
+    visitors.
+
+    Filters to ``*.pdf`` only so the co-located
+    ``expected_results.csv`` (used by the batch-intake acceptance
+    test) is not surfaced as an invoice.
+    """
+    d = _demo_pdf_dir()
+    if not d.exists():
         return []
-    return sorted(p for p in _DEMO_PDF_DIR.iterdir()
+    return sorted(p for p in d.iterdir()
                   if p.suffix.lower() == ".pdf")
 
 

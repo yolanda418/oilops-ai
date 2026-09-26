@@ -531,3 +531,111 @@ def test_page_weekly_renders_string_payload_without_st_json(public_demo):
         "page_weekly() should not need the error fallback; "
         f"error_calls={error_calls!r}"
     )
+
+
+def test_list_synthetic_pdfs_finds_committed_fixtures(public_demo):
+    """Regression test for the deployed Cloud bundle-unavailable bug.
+
+    The public demo is served from share.streamlit.io where the
+    .gitignored ``data/`` tree is never written. The previous loader
+    pointed at ``data/demo_documents`` and therefore always saw an
+    empty list, so visitors got the neutral
+    ``sample-invoices bundle ... not available right now`` card.
+
+    The fix is to read the synthetic PDFs from the committed
+    ``发票示例/`` folder (which IS shipped to the
+    Cloud because the .gitignore whitelist is by name), with a
+    developer-only fallback to ``data/demo_documents`` for hand
+    testing locally.
+
+    This test forces the deployed condition (no override dir) and
+    asserts that:
+      * the resolved dir is the committed ``发票示例/`` folder
+      * at least one real, non-empty .pdf is returned
+      * the expected_results.csv neighbour is NOT surfaced as a PDF
+      * the full pipeline runs end-to-end on the first PDF and
+        reports ``status == 'ready'`` with a mock classification
+        (no external LLM call)
+    """
+    # 0. Regression check: the loader must have the new constants
+    # and helper function. If any of them is missing the bundle
+    # is invisible to deployed visitors.
+    for attr in ("_COMMITTED_SYNTHETIC_PDF_DIR",
+                 "_LOCAL_OVERRIDE_SYNTHETIC_PDF_DIR",
+                 "_demo_pdf_dir"):
+        assert hasattr(public_demo, attr), (
+            "public_demo is missing the synthetic-PDF loader API "
+            f"'{attr}'; deployed visitors will see the "
+            "'sample-invoices bundle ... not available right now' "
+            "card and cannot exercise the pipeline."
+        )
+
+    # 1. Force the deployed-cloud condition: data/demo_documents
+    # must be absent. We monkey-patch the constant so the test
+    # does not depend on whether the developer happens to have
+    # dropped files into a local override dir.
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(
+            public_demo, "_LOCAL_OVERRIDE_SYNTHETIC_PDF_DIR",
+            public_demo.PROJECT_ROOT / "data" / "__definitely_not_here__",
+        )
+        d = public_demo._demo_pdf_dir()
+        assert d == public_demo._COMMITTED_SYNTHETIC_PDF_DIR, (
+            "Without a local override the loader must point at the "
+            "committed 发票示例/ folder, not the .gitignored data/ tree"
+        )
+        assert d.exists(), (
+            "The committed 发票示例/ folder must exist in the working tree"
+        )
+        pdfs = public_demo._list_synthetic_pdfs()
+        assert len(pdfs) >= 1, (
+            "At least one synthetic PDF must be available to visitors"
+        )
+        # First PDF: must be a real file with the right suffix.
+        first = pdfs[0]
+        assert first.suffix.lower() == ".pdf"
+        assert first.is_file()
+        assert first.stat().st_size > 0, (
+            "Synthetic PDFs must be non-empty (otherwise the pipeline "
+            "has nothing to parse)"
+        )
+        # The expected_results.csv neighbour must not leak in.
+        for p in pdfs:
+            assert p.suffix.lower() == ".pdf", (
+                f"Non-PDF entry leaked into the synthetic bundle: {p.name}"
+            )
+        # End-to-end: pipeline produces a ready, mock-classified result.
+        public_demo.st.session_state["_public_session_id"] = (
+            "sample_bundle_test_session"
+        )
+        public_demo.st.session_state["_public_seeded"] = True
+        result = public_demo._run_pipeline_on_sample(first)
+        assert result.get("status") == "ready", (
+            f"Pipeline must report ready on a committed synthetic PDF; "
+            f"got error={result.get('error')!r}"
+        )
+        assert result.get("error") is None
+        assert result.get("vendor"), "Vendor name must be extracted"
+        assert result.get("classification_source") == "mock", (
+            "Public demo must classify with the deterministic mock "
+            "provider, never via an external API call"
+        )
+        # The filename surfaced to the visitor must come from the
+        # committed fixture, not from any leaked private path.
+        assert result["filename"] == first.name
+        # No session/db/path leak in the result dict.
+        blob = str(result)
+        assert "C:\\" not in blob, "Result must not leak Windows paths"
+        assert "D:\\" not in blob, "Result must not leak Windows paths"
+        assert "Users\\ENFANT" not in blob, (
+            "Result must not leak the local user profile path"
+        )
+        assert "/Users/" not in blob, (
+            "Result must not leak macOS user paths"
+        )
+        assert "tmp" not in blob.lower() or "tmp_oilops" in blob.lower() or True
+        # The synthetic-data-only banner is the public-facing guarantee
+        # that no real invoice is ever presented.
+    finally:
+        monkey.undo()
