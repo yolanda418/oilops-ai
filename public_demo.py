@@ -22,6 +22,7 @@ them. The local desktop app (app.py) is unchanged.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import tempfile
@@ -35,6 +36,21 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import streamlit as st  # noqa: E402
+
+# Public-facing message shown to visitors when something goes wrong on
+# the server. We intentionally keep it short, neutral, and free of any
+# identifier that could leak implementation details. Server-side details
+# go to the Streamlit Cloud logs only.
+_PUBLIC_UNAVAILABLE_MSG = (
+    "The demo is temporarily unavailable. "
+    "Please refresh and try again."
+)
+
+# Logger used to capture server-side error context. Streamlit Cloud
+# captures logging output into the run logs.
+_public_log = logging.getLogger("public_demo")
+if not _public_log.handlers:
+    _public_log.setLevel(logging.INFO)
 
 st.set_page_config(
     page_title="OilOps AI - Public Demo",
@@ -60,6 +76,30 @@ st.markdown(_PUBLIC_BANNER_HTML, unsafe_allow_html=True)
 # ---------------------------------------------------------------------------
 # Session-scoped storage helpers.
 # ---------------------------------------------------------------------------
+
+def _safe_page(fn) -> None:
+    """Render a page inside a hardened error boundary.
+
+    Any exception raised by ``fn`` is captured, logged with its
+    full server-side traceback (to the Streamlit Cloud run logs),
+    and replaced with a neutral public message. The underlying
+    exception text is NEVER rendered to the visitor.
+    """
+
+    try:
+        fn()
+    except Exception:  # pragma: no cover - defensive
+        _public_log.exception(
+            "Public demo page %s failed", getattr(fn, "__name__", repr(fn))
+        )
+        try:
+            st.error(_PUBLIC_UNAVAILABLE_MSG)
+        except Exception:
+            # If even st.error fails (extremely unlikely), do not
+            # raise from the boundary - the Streamlit runtime
+            # would otherwise dump a raw traceback to the page.
+            pass
+
 
 def _public_root() -> Path:
     """Root directory for all public-mode session storage."""
@@ -136,9 +176,11 @@ except Exception:
 from database.db import (  # noqa: E402
     init_db,
     transaction,
+    get_connection,
 )
 from services.weekly_summary import (  # noqa: E402
     build_deterministic_weekly_summary,
+    compute_weekly_facts,
 )
 from services.dashboard_service import compute_dashboard  # noqa: E402
 from services.invoice_parser import parse_pdf  # noqa: E402
@@ -161,9 +203,12 @@ from services.invoice_repository import (  # noqa: E402
     mark_paid,
 )
 try:  # pragma: no cover - list_invoices may not exist in older builds
-    from services.invoice_repository import list_invoices, get_invoice  # noqa: E402
+    from services.invoice_repository import (  # noqa: E402
+        list_payment_tracker,
+        get_invoice,
+    )
 except ImportError:
-    list_invoices = None  # type: ignore[assignment]
+    list_payment_tracker = None  # type: ignore[assignment]
     get_invoice = None  # type: ignore[assignment]
 
 from services.document_storage import save_pdf  # noqa: E402
@@ -209,50 +254,58 @@ def _insert_seed_row(conn, *, vendor, inv_no, inv_date, due_date, po,
 
 
 def _seed_session_if_empty() -> None:
-    """Insert a few representative rows so first-time visitors see KPIs."""
-    if st.session_state.get("_public_seeded"):
-        return
-    db = str(_session_db_path())
-    init_db(db)
-    with transaction(db) as conn:
-        cur = conn.execute("SELECT COUNT(*) FROM invoices")
-        if int(cur.fetchone()[0]) > 0:
-            st.session_state["_public_seeded"] = True
+    """Insert a few representative rows so first-time visitors see KPIs.
+
+    Any failure inside seeding is swallowed and logged; visitors
+    see an empty (but well-rendered) dashboard instead of a
+    traceback.
+    """
+    try:
+        if st.session_state.get("_public_seeded"):
             return
-        _insert_seed_row(
-            conn, vendor="Prairie Pump Rentals (synthetic)",
-            inv_no="DEMO-PPR-001", inv_date="2026-09-15",
-            due_date="2026-09-30", po="PO-1042",
-            subtotal="5000.00", gst="250.00", total="5250.00",
-            currency="CAD",
-            description="Equipment rental for wellsite pump.",
-            category="Equipment")
-        _insert_seed_row(
-            conn, vendor="Foothills Lab Services (synthetic)",
-            inv_no="DEMO-FL-002", inv_date="2026-09-18",
-            due_date="2026-10-02", po="PO-1051",
-            subtotal="1800.00", gst="90.00", total="1890.00",
-            currency="CAD",
-            description="Core analysis - well 14-22.",
-            category="Lab Services")
-        _insert_seed_row(
-            conn, vendor="Northern Transport Inc (synthetic)",
-            inv_no="DEMO-NTI-003", inv_date="2026-09-20",
-            due_date="2026-10-05", po="",
-            subtotal="3200.00", gst="0.00", total="3200.00",
-            currency="USD",
-            description="Water hauling - battery 03.",
-            category="Transport")
-    with transaction(db) as conn:
-        rows = conn.execute(
-            "SELECT id FROM invoices ORDER BY id ASC LIMIT 1"
-        ).fetchall()
-        if rows:
-            first_id = int(rows[0][0])
-            approve_invoice(conn, first_id, reviewer="Public Demo Seed")
-            mark_paid(conn, first_id, paid_at="2026-09-25T10:00:00",
-                      payment_note="seed-paid")
-    st.session_state["_public_seeded"] = True
+        db = str(_session_db_path())
+        init_db(db)
+        with transaction(db) as conn:
+            cur = conn.execute("SELECT COUNT(*) FROM invoices")
+            if int(cur.fetchone()[0]) > 0:
+                st.session_state["_public_seeded"] = True
+                return
+            _insert_seed_row(
+                conn, vendor="Prairie Pump Rentals (synthetic)",
+                inv_no="DEMO-PPR-001", inv_date="2026-09-15",
+                due_date="2026-09-30", po="PO-1042",
+                subtotal="5000.00", gst="250.00", total="5250.00",
+                currency="CAD",
+                description="Equipment rental for wellsite pump.",
+                category="Equipment")
+            _insert_seed_row(
+                conn, vendor="Foothills Lab Services (synthetic)",
+                inv_no="DEMO-FL-002", inv_date="2026-09-18",
+                due_date="2026-10-02", po="PO-1051",
+                subtotal="1800.00", gst="90.00", total="1890.00",
+                currency="CAD",
+                description="Core analysis - well 14-22.",
+                category="Lab Services")
+            _insert_seed_row(
+                conn, vendor="Northern Transport Inc (synthetic)",
+                inv_no="DEMO-NTI-003", inv_date="2026-09-20",
+                due_date="2026-10-05", po="",
+                subtotal="3200.00", gst="0.00", total="3200.00",
+                currency="USD",
+                description="Water hauling - battery 03.",
+                category="Transport")
+        with transaction(db) as conn:
+            rows = conn.execute(
+                "SELECT id FROM invoices ORDER BY id ASC LIMIT 1"
+            ).fetchall()
+            if rows:
+                first_id = int(rows[0][0])
+                approve_invoice(conn, first_id, reviewer="Public Demo Seed")
+                mark_paid(conn, first_id, paid_at="2026-09-25T10:00:00",
+                          payment_note="seed-paid")
+        st.session_state["_public_seeded"] = True
+    except Exception:
+        _public_log.exception("Seeding failed; continuing with empty session")
 
 
 # ---------------------------------------------------------------------------
@@ -336,29 +389,107 @@ def _run_pipeline_on_sample(pdf_path: Path) -> dict:
             "invoice_id": inv_id,
         })
     except Exception as exc:
-        result["error"] = str(exc)
+        # Never leak the exception text to a public visitor. The
+        # dict we return is later shown to the visitor via st.dataframe
+        # in page_process_samples, so keep "error" at a neutral
+        # message and route the real detail to the server logs only.
+        try:
+            _public_log.exception(
+                "Per-sample pipeline failed for %s",
+                getattr(pdf_path, "name", repr(pdf_path)),
+            )
+        except Exception:
+            pass
+        result["error"] = "processing error (see server logs)"
     return result
 
 
 # ---------------------------------------------------------------------------
 # Pages
 # ---------------------------------------------------------------------------
+
+def _fmt_money(amounts):
+    """Render a per-currency money summary. Internal helper only;
+    never accepts or returns paths, environment variables, or any
+    other visitor-identifying data."""
+    if not amounts:
+        return "-"
+    return " / ".join(
+        f"{ccy} {v:,.2f}" for ccy, v in sorted(amounts.items())
+    )
+
+
+def _ref_date():
+    from datetime import date as _date
+    return _date.today()
+
+
 def page_dashboard() -> None:
     st.header("Dashboard")
     st.caption("Public demo dashboard. All numbers below are derived "
                "from the synthetic invoices in YOUR session only.")
-    payload = compute_dashboard(db_path=str(_session_db_path()))
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total invoices", payload.get("total_invoices", 0))
-    c2.metric("Pending review", payload.get("pending_count", 0))
-    c3.metric("Approved", payload.get("approved_count", 0))
-    c4.metric("Paid", payload.get("paid_count", 0))
-    rows = payload.get("by_category", []) or []
-    if rows:
-        st.subheader("Spend by category (mock-classified)")
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-    else:
-        st.info("No invoices in this session yet.")
+    # Use the real compute_dashboard signature: (conn, reference_date, currency=None).
+    # Wrapped in its own try/except so the rest of the page stays healthy even
+    # if the snapshot could not be built.
+    try:
+        db = str(_session_db_path())
+        conn = get_connection(db)
+        try:
+            snap = compute_dashboard(conn, _ref_date())
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        kpis = snap.kpis
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total invoices", kpis.total_invoices)
+        c2.metric("Pending review", kpis.pending_review)
+        c3.metric("Due this week", kpis.due_this_week)
+        c4.metric("Overdue", kpis.overdue)
+        c5, c6 = st.columns(2)
+        c5.metric("Approved", kpis.approved)
+        c6.metric("Rejected", kpis.rejected)
+        st.metric("Possible duplicate groups",
+                  kpis.possible_duplicate_groups)
+        st.metric("Outstanding amount",
+                  _fmt_money(kpis.outstanding_amount.amounts))
+        st.metric("Paid amount",
+                  _fmt_money(kpis.paid_amount.amounts))
+        if snap.needs_attention:
+            st.subheader("Needs attention")
+            st.dataframe(
+                [{
+                    "ID": it.invoice_id,
+                    "Vendor": it.vendor_name or "?",
+                    "Invoice #": it.invoice_number or "?",
+                    "Due": it.due_date or "?",
+                    "Total": float(it.total_amount)
+                    if it.total_amount is not None else None,
+                    "Currency": it.currency or "",
+                    "Status": it.status,
+                    "Reasons": ", ".join(it.reasons) if it.reasons else "-",
+                } for it in snap.needs_attention],
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("Nothing needs attention in this session.")
+        if snap.spend_by_category:
+            st.subheader("Approved spend by category")
+            st.dataframe(
+                [{
+                    "Category": c.category,
+                    "Currency": c.currency,
+                    "Invoice count": c.invoice_count,
+                    "Total amount": float(c.total_amount),
+                } for c in snap.spend_by_category],
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("No approved spend yet in this session.")
+    except Exception:
+        _public_log.exception("Dashboard render failed")
+        st.error(_PUBLIC_UNAVAILABLE_MSG)
 
 
 def page_process_samples() -> None:
@@ -369,7 +500,11 @@ def page_process_samples() -> None:
         "validate -> mock-classify pipeline as the desktop build.")
     pdfs = _list_synthetic_pdfs()
     if not pdfs:
-        st.error("No synthetic PDFs found at " + str(_DEMO_PDF_DIR))
+        # Show a neutral message; never echo the on-disk path.
+        st.info(
+            "The synthetic sample-invoices bundle for this demo is "
+            "not available right now. Other pages are still usable."
+        )
         return
     labels = [p.name for p in pdfs]
     selected = st.multiselect("Pick one or more synthetic invoices",
@@ -405,11 +540,20 @@ def page_tracker() -> None:
     st.caption("Browse, approve, reject, and mark-as-paid in your session. "
                "All changes are confined to this session's temporary "
                "database and evaporate on container restart.")
-    db = str(_session_db_path())
-    if list_invoices is None or get_invoice is None:
+    if list_payment_tracker is None or get_invoice is None:
         st.warning("Tracker list/get APIs are not available in this build.")
         return
-    invoices = list_invoices(db_path=db)
+    db = str(_session_db_path())
+    # Open a connection for the read; never expose its path or row ids
+    # containing internal ids beyond what the visitor can already see.
+    conn = get_connection(db)
+    try:
+        invoices = list_payment_tracker(conn)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
     if not invoices:
         st.info("No invoices in this session yet. Run 'Process sample "
                 "invoices' first.")
@@ -420,11 +564,37 @@ def page_tracker() -> None:
         return
     inv_id_str = st.selectbox("Invoice id", options=options, key="tk_id")
     if inv_id_str:
-        inv = get_invoice(int(inv_id_str), db_path=db)
+        conn = get_connection(db)
+        try:
+            try:
+                inv = get_invoice(conn, int(inv_id_str))
+            except Exception:
+                _public_log.exception("get_invoice failed")
+                st.warning("Invoice not found.")
+                return
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
         if inv is None:
-            st.warning("Invoice not found.")
             return
-        st.json(inv)
+        # Render a visitor-safe view of the record. Drop any field that
+        # could contain a server filesystem path or internal traceability
+        # information; show the synthetic-invoice fields only.
+        _SAFE_TRACKER_KEYS = (
+            "id", "vendor_name", "invoice_number", "invoice_date",
+            "due_date", "currency", "subtotal", "gst", "total_amount",
+            "expense_category", "classification_source", "status",
+            "reviewer", "review_note", "paid_at", "payment_note",
+        )
+        try:
+            # SavedInvoice is a dataclass; .__dict__ is the canonical view.
+            raw = getattr(inv, "__dict__", {}) or {}
+            safe_view = {k: raw.get(k) for k in _SAFE_TRACKER_KEYS}
+        except Exception:
+            safe_view = {}
+        st.json(safe_view)
         cols = st.columns(4)
         with cols[0]:
             if st.button("Approve", key="tk_approve"):
@@ -458,10 +628,19 @@ def page_export() -> None:
                "real vendor data is ever included.")
     db = str(_session_db_path())
     try:
-        csv_text = build_tracker_csv(db_path=db)
+        conn = get_connection(db)
+        try:
+            csv_text = build_tracker_csv(conn)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
         assert_no_sensitive_columns(csv_text)
-    except Exception as exc:
-        st.error("Export failed: " + str(exc))
+    except Exception:
+        # Never show exception text to public visitors.
+        _public_log.exception("CSV export failed")
+        st.error(_PUBLIC_UNAVAILABLE_MSG)
         return
     st.download_button("Download tracker.csv", data=csv_text,
                        file_name="public_demo_tracker.csv", mime="text/csv")
@@ -471,9 +650,20 @@ def page_weekly() -> None:
     st.header("Weekly summary (mock narrative)")
     st.caption("The narrative below is generated by a deterministic mock. "
                "No external LLM call is ever made in public mode.")
-    payload = build_deterministic_weekly_summary(
-        db_path=str(_session_db_path()))
-    st.json(payload)
+    try:
+        conn = get_connection(str(_session_db_path()))
+        try:
+            facts = compute_weekly_facts(conn, _ref_date())
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        payload = build_deterministic_weekly_summary(facts)
+        st.json(payload)
+    except Exception:
+        _public_log.exception("Weekly summary render failed")
+        st.error(_PUBLIC_UNAVAILABLE_MSG)
 
 
 def page_about() -> None:
@@ -493,9 +683,10 @@ def page_about() -> None:
         "* Not a place to upload real vendor documents. Uploads are "
         "disabled at the UI layer; the backend would refuse them even "
         "if they slipped through.\n"
-        "* Not persistent. Session data lives in "
-        "`/tmp/oilops_public_sessions/<id>/` and evaporates when the "
-        "Streamlit container restarts.\n\n"
+        "* Not persistent. Each browser session gets a temporary, "
+        "isolated working area that evaporates when the Streamlit "
+        "container restarts. Nothing you do here touches a long-term "
+        "database.\n\n"
         "**Source code:** https://github.com/yolanda418/oilops-ai\n"
     )
 
@@ -511,16 +702,30 @@ PAGES = {
 
 
 def main() -> None:
-    _seed_session_if_empty()
-    st.sidebar.title("OilOps AI - Public Demo")
-    st.sidebar.caption(
-        "Session id: `" + _get_session_id() + "`\n\n"
-        "DB: `" + str(_session_db_path()) + "`\n\n"
-        "Docs: `" + str(_session_docs_dir()) + "`"
-    )
-    choice = st.sidebar.radio("Navigate", list(PAGES.keys()),
-                              key="public_nav")
-    PAGES[choice]()
+    # Top-level error boundary. Anything that goes wrong before or
+    # during the page dispatch is logged server-side and replaced
+    # with a neutral public message - the visitor never sees a
+    # Python traceback or a server file path.
+    try:
+        _seed_session_if_empty()
+        # Public-facing sidebar: product blurb + nav. Never echo
+        # session ids, DB paths, docs paths, temp dirs, environment
+        # variables or anything else that could identify the visitor
+        # or the server.
+        st.sidebar.title("OilOps AI - Public Demo")
+        st.sidebar.caption(
+            "Synthetic-data walkthrough of the OilOps AI pipeline. "
+            "All numbers, vendors and PDFs are generated for this demo."
+        )
+        choice = st.sidebar.radio("Navigate", list(PAGES.keys()),
+                                  key="public_nav")
+        _safe_page(PAGES[choice])
+    except Exception:
+        _public_log.exception("Public demo main() failed")
+        try:
+            st.error(_PUBLIC_UNAVAILABLE_MSG)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -278,3 +278,193 @@ def test_pipeline_writes_to_session_docs_dir_only(
     # The pipeline may leave it unset, which is the safe default.
     assert "OILOPS_DOCS_DIR" not in os.environ or \
         os.environ["OILOPS_DOCS_DIR"] == str(session_docs)
+
+
+# -*- coding: utf-8 -*-
+"""Newly added leak-prevention tests.
+
+Appended into tests/test_public_demo_mode.py by the session
+orchestrator. The block below defines the leak tokens, a recording
+streamlit stub, and several public-visibility tests.
+"""
+
+# --------------------------------------------------------------------
+# Public-visibility leak prevention tokens.
+# --------------------------------------------------------------------
+_LEAK_TOKENS = (
+    "/tmp/",
+    "/mount/",
+    "Session id:",
+    "demo.sqlite",
+    "Docs:`",
+    "C:\\",
+    "D:\\",
+)
+
+
+# --------------------------------------------------------------------
+# Tiny recorder: collects every streamlit call so we can grep it.
+# --------------------------------------------------------------------
+class _Recorder:
+    def __init__(self):
+        self.records = []
+
+    def __call__(self, *args, **kwargs):
+        self.records.append((args, kwargs))
+
+
+def _flatten_records(records):
+    out = []
+    for args, kwargs in records:
+        for v in args:
+            try:
+                out.append(str(v))
+            except Exception:
+                continue
+        for v in kwargs.values():
+            try:
+                out.append(str(v))
+            except Exception:
+                continue
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------
+# Tests.
+# --------------------------------------------------------------------
+def test_public_module_source_has_no_session_id_or_temp_path():
+    """Static assertion: the module source must never expose server
+    identifiers in code paths reachable from the public UI."""
+    src = (PROJECT_ROOT / "public_demo.py").read_text(encoding="utf-8")
+    forbidden_strings = (
+        "Session id:",
+        "DB: `",
+        "Docs: `",
+        "/tmp/oilops_public_sessions",
+        "/mount/",
+        "C:\\",
+        "D:\\",
+        "traceback.format_exc",
+    )
+    for needle in forbidden_strings:
+        assert needle not in src, (
+            f"public_demo.py must not contain visitor-visible text {needle!r}"
+        )
+
+
+def test_public_module_uses_correct_compute_dashboard_signature():
+    """page_dashboard must call compute_dashboard(conn, ref_date, ...)."""
+    import re
+    src = (PROJECT_ROOT / "public_demo.py").read_text(encoding="utf-8")
+    matches = re.findall(r"compute_dashboard\([^)]*\)", src, flags=re.S)
+    assert matches, "expected at least one compute_dashboard call site"
+    for m in matches:
+        assert "db_path" not in m, (
+            f"compute_dashboard must not be called with db_path kwarg: {m!r}"
+        )
+        assert re.search(r"compute_dashboard\(\s*[A-Za-z_]+\s*,", m), (
+            f"compute_dashboard call must pass a conn first positional arg: {m!r}"
+        )
+
+
+def test_main_renders_without_leak(monkeypatch, tmp_path):
+    """Run main() and inspect every text payload rendered to streamlit."""
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    for mod in list(sys.modules):
+        if mod == "public_demo" or mod.startswith("public_demo."):
+            del sys.modules[mod]
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+    stub = _install_streamlit_stub()
+    rec = _Recorder()
+
+    def _capture(name):
+        def _fn(*a, **k):
+            rec((name,) + a, k)
+        return _fn
+
+    stub.error = _capture("error")
+    stub.markdown = _capture("markdown")
+    stub.caption = _capture("caption")
+    stub.info = _capture("info")
+    stub.warning = _capture("warning")
+    stub.success = _capture("success")
+    stub.header = _capture("header")
+    stub.subheader = _capture("subheader")
+
+    def _json_capture(*a, **k):
+        try:
+            rec(("json", repr(a[0]) if a else ""), k)
+        except Exception:
+            rec(("json", ""), k)
+    stub.json = _json_capture
+
+    def _df_capture(*a, **k):
+        try:
+            rec(("dataframe", repr(a[0]) if a else ""), k)
+        except Exception:
+            rec(("dataframe", ""), k)
+    stub.dataframe = _df_capture
+
+    def _metric_capture(*a, **k):
+        try:
+            rec(("metric", repr((a, k))), k)
+        except Exception:
+            rec(("metric", ""), k)
+    stub.metric = _metric_capture
+
+    sb = stub.sidebar
+    sb.title = _capture("sidebar.title")
+    sb.caption = _capture("sidebar.caption")
+    def _radio(*a, **k):
+        rec(("sidebar.radio",) + a, k)
+        if a and isinstance(a[0], (list, tuple)) and a[0]:
+            return a[0][0]
+        return ""
+    sb.radio = _radio
+
+    pd = importlib.import_module("public_demo")
+    try:
+        pd.main()
+    except SystemExit:
+        pass
+    except Exception:
+        pytest.fail("public_demo.main() raised an unhandled exception")
+    blob = _flatten_records(rec.records)
+    for needle in _LEAK_TOKENS:
+        assert needle not in blob, (
+            f"Streamlit received visitor-visible leak {needle!r}: {blob[:400]!r}"
+        )
+
+
+def test_safe_page_replaces_exception_with_neutral_message(public_demo):
+    """A page that raises must NOT propagate; _safe_page must show the
+    generic message and must NOT include the exception text."""
+    rec = _Recorder()
+
+    def _boom():
+        raise RuntimeError("super-secret-internal-detail-do-not-leak")
+
+    public_demo.st.error = lambda *a, **k: rec((("error",) + a), k)
+    public_demo._safe_page(_boom)
+    blob = _flatten_records(rec.records)
+    assert "super-secret-internal-detail-do-not-leak" not in blob
+    assert "temporarily unavailable" in blob.lower()
+
+
+def test_pipeline_failure_does_not_leak_exception_text(public_demo):
+    """result['error'] returned from _run_pipeline_on_sample must not
+    contain a raw exception message; it should be a neutral sentinel."""
+    pdfs = public_demo._list_synthetic_pdfs()
+    if not pdfs:
+        pytest.skip("No synthetic PDFs available.")
+    public_demo.st.session_state["_public_session_id"] = "leak_check"
+    public_demo.st.session_state["_public_seeded"] = True
+
+    def _explode(*a, **k):
+        raise RuntimeError("internal-detail-with-sk-secret-and-paths")
+    public_demo.parse_pdf = _explode
+    result = public_demo._run_pipeline_on_sample(pdfs[0])
+    assert result.get("error") is not None
+    assert "internal-detail-with-sk-secret-and-paths" not in str(result["error"])
+    assert "sk-secret" not in str(result["error"])
