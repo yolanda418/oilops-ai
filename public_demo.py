@@ -660,7 +660,18 @@ def page_weekly() -> None:
             except Exception:
                 pass
         payload = build_deterministic_weekly_summary(facts)
-        st.json(payload)
+        # The deterministic mock summary is a multi-line markdown string,
+        # NOT a JSON-serializable dict. Rendering it via st.json() makes
+        # the Streamlit frontend try to JSON.parse the leading
+        # "Weekly Office Operations Summary" text and surface a
+        # "Json Parse Error: Unexpected token 'W', ...is not valid JSON"
+        # exception card to the visitor. Render as a code block instead.
+        if not isinstance(payload, str):
+            # Defensive: only call st.json when the payload is actually
+            # a JSON-serializable structure.
+            st.json(payload)
+        else:
+            st.code(payload, language="markdown")
     except Exception:
         _public_log.exception("Weekly summary render failed")
         st.error(_PUBLIC_UNAVAILABLE_MSG)

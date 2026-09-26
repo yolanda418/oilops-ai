@@ -468,3 +468,66 @@ def test_pipeline_failure_does_not_leak_exception_text(public_demo):
     assert result.get("error") is not None
     assert "internal-detail-with-sk-secret-and-paths" not in str(result["error"])
     assert "sk-secret" not in str(result["error"])
+
+
+
+def test_page_weekly_renders_string_payload_without_st_json(public_demo):
+    """Regression test for the public-demo Weekly Summary bug.
+
+    build_deterministic_weekly_summary(facts) returns a multi-line str
+    (the deterministic mock narrative). The previous page_weekly() passed
+    that string straight into st.json(...); Streamlit's frontend then
+    surfaced a Json Parse Error card to the visitor.
+
+    This test asserts page_weekly() never calls st.json with a string
+    payload; string payloads must be rendered via st.code() instead.
+    """
+    public_demo.st.session_state["_public_session_id"] = "weekly_test"
+    public_demo.st.session_state["_public_seeded"] = True
+
+    sentinel_summary = (
+        "Weekly Office Operations Summary (synthetic)\n"
+        "Recorded this week: 0 invoices.\n"
+        "Pending review: 0.\n"
+        "Outstanding: 0.\n"
+    )
+
+    def _stub_facts(conn, ref_date):
+        return object()
+
+    def _stub_summary(facts):
+        return sentinel_summary
+
+    public_demo.compute_weekly_facts = _stub_facts
+    public_demo.build_deterministic_weekly_summary = _stub_summary
+
+    json_calls = []
+    code_calls = []
+    error_calls = []
+
+    def _json_capture(*a, **k):
+        json_calls.append((a, k))
+        if a and isinstance(a[0], str):
+            raise TypeError("Object of type str is not JSON serializable")
+
+    def _code_capture(*a, **k):
+        code_calls.append((a, k))
+
+    public_demo.st.json = _json_capture
+    public_demo.st.code = _code_capture
+    public_demo.st.error = lambda *a, **k: error_calls.append((a, k))
+
+    public_demo._safe_page(public_demo.page_weekly)
+
+    assert json_calls == [], (
+        "page_weekly() must not call st.json() with a string payload; "
+        f"saw calls={json_calls!r}"
+    )
+    assert code_calls, "page_weekly() must render the narrative via st.code()"
+    rendered_text = code_calls[0][0][0]
+    assert isinstance(rendered_text, str)
+    assert "Weekly" in rendered_text
+    assert error_calls == [], (
+        "page_weekly() should not need the error fallback; "
+        f"error_calls={error_calls!r}"
+    )
